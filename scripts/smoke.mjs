@@ -89,7 +89,8 @@ const ddp = (url) =>
 await step('web client is served', async () => {
 	const res = await fetch(`${base}/`);
 	const html = await res.text();
-	if (!res.ok || !html.includes('__meteor_runtime_config__')) throw new Error(`GET / -> ${res.status}`);
+	// The runtime config is inlined (`__meteor_runtime_config__`) or loaded from /meteor_runtime_config.js.
+	if (!res.ok || !html.includes('meteor_runtime_config')) throw new Error(`GET / -> ${res.status}: ${html.slice(0, 400)}`);
 });
 
 await step('server info', async () => {

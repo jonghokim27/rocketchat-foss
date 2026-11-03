@@ -12,7 +12,8 @@ on:
         required: false
   push:
     branches: [main]
-    paths-ignore: ['**.md']
+    # The smoke test does not change the image; run smoke.yml by hand against the last candidate.
+    paths-ignore: ['**.md', 'scripts/smoke*.mjs', 'scripts/run-smoke.sh', '.github/workflows/smoke.yml']
 
 permissions:
   contents: read
