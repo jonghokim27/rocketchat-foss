@@ -1,0 +1,70 @@
+name: smoke
+
+# Smoke-tests a built image and, if asked, gives it the plain release tag (`:<version>`).
+# Called by build.yml; can also be run by hand against any candidate tag.
+
+on:
+  workflow_call:
+    inputs:
+      image: { type: string, required: true }
+      version: { type: string, required: true }
+      promote: { type: boolean, default: false }
+  workflow_dispatch:
+    inputs:
+      image: { description: 'image to test, e.g. ghcr.io/<owner>/rocketchat-foss:8.9.0-build.3', required: true }
+      version: { description: Rocket.Chat version the image must report, required: true }
+      promote: { description: 'tag it :<version> if the smoke test passes', type: boolean, default: false }
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/rocketchat-foss
+  MONGO_IMAGE: mongodb/mongodb-community-server:8.0-ubi8
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull images
+        run: |
+          docker pull "${{ inputs.image }}"
+          docker pull "$MONGO_IMAGE"
+          docker image inspect "${{ inputs.image }}" --format 'size {{.Size}} bytes, labels {{json .Config.Labels}}'
+
+      - name: Playwright
+        run: |
+          npm install --no-save --no-package-lock playwright@1.52.0
+          npx playwright install --with-deps chromium
+
+      - name: Smoke test
+        run: bash scripts/run-smoke.sh "${{ inputs.image }}" "${{ inputs.version }}" "$MONGO_IMAGE" smoke-out
+
+      - name: Keep logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: smoke-out
+          if-no-files-found: ignore
+
+      - name: Promote to :${{ inputs.version }}
+        if: inputs.promote
+        run: |
+          docker buildx imagetools create -t "$IMAGE:${{ inputs.version }}" "${{ inputs.image }}"
+          docker buildx imagetools inspect "$IMAGE:${{ inputs.version }}"
+          echo "promoted \`${{ inputs.image }}\` → \`$IMAGE:${{ inputs.version }}\`" >> "$GITHUB_STEP_SUMMARY"

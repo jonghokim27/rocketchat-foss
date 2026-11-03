@@ -1,0 +1,204 @@
+name: build
+
+# Builds the FOSS image for one Rocket.Chat release, smoke-tests it, and only then gives it the
+# release tag. Every build is first pushed as `<version>-build.<run>` so a failed smoke test can be
+# investigated (or re-run with smoke.yml) without rebuilding.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Rocket.Chat release tag (default UPSTREAM_VERSION)
+        required: false
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/rocketchat-foss
+  TURBO_TELEMETRY_DISABLED: '1'
+  DO_NOT_TRACK: '1'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      candidate: ${{ steps.push.outputs.candidate }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: foss
+
+      - id: version
+        name: Resolve version
+        run: |
+          VERSION="${{ inputs.version }}"
+          [ -n "$VERSION" ] || VERSION="$(tr -d '[:space:]' < foss/UPSTREAM_VERSION)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Rocket.Chat $VERSION" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Free disk space and add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker image prune -af >/dev/null
+          sudo swapoff -a || true
+          sudo fallocate -l 12G /swapfile2 && sudo chmod 600 /swapfile2 && sudo mkswap /swapfile2 >/dev/null && sudo swapon /swapfile2
+          free -h; df -h /
+
+      - name: Checkout Rocket.Chat ${{ steps.version.outputs.version }}
+        run: |
+          git clone --depth 1 --branch "${{ steps.version.outputs.version }}" https://github.com/RocketChat/Rocket.Chat.git rc
+          echo "UPSTREAM_SHA=$(git -C rc rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "upstream commit: $(git -C rc rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Apply FOSS overlay
+        working-directory: rc
+        run: bash ../foss/scripts/apply-foss.sh ../foss/overlay
+
+      - name: Node version
+        run: echo "NODE_VERSION=$(node -p "require('./rc/package.json').volta.node")" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Yarn cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.yarn/berry/cache
+          key: yarn-${{ steps.version.outputs.version }}-${{ hashFiles('foss/overlay/**/package.json') }}
+          restore-keys: yarn-${{ steps.version.outputs.version }}-
+
+      - name: Install dependencies
+        working-directory: rc
+        env:
+          YARN_ENABLE_IMMUTABLE_INSTALLS: 'false'
+          YARN_ENABLE_HARDENED_MODE: '0'
+          YARN_ENABLE_GLOBAL_CACHE: 'true'
+        run: |
+          corepack enable
+          yarn --version
+          yarn config set supportedArchitectures --json '{"os": ["linux"], "cpu": ["x64"], "libc": ["glibc", "musl"]}'
+          yarn install
+
+      - name: Build packages
+        working-directory: rc
+        run: yarn build
+
+      - name: Production dependencies for the Meteor build
+        working-directory: rc
+        env:
+          YARN_ENABLE_IMMUTABLE_INSTALLS: 'false'
+          YARN_ENABLE_GLOBAL_CACHE: 'true'
+        run: |
+          cd apps/meteor
+          cp package.json package.json.bak
+          jq '.dependencies = (.dependencies + .devDependencies) | del(.devDependencies)' package.json > package.json.tmp
+          mv package.json.tmp package.json
+          cd ../..
+          yarn workspaces focus --all --production
+          mv apps/meteor/package.json.bak apps/meteor/package.json
+
+      - name: Meteor cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.meteor
+          key: meteor-${{ hashFiles('rc/apps/meteor/.meteor/release') }}
+
+      - name: Install Meteor
+        run: |
+          if [ -x ~/.meteor/meteor ]; then
+            sudo ln -sf ~/.meteor/meteor /usr/local/bin/meteor
+          else
+            curl -sL "https://install.meteor.com/?release=$(cut -d@ -f2 rc/apps/meteor/.meteor/release)" | sed s/--progress-bar/-sL/g | sh
+          fi
+          meteor --version
+
+      - name: Meteor build
+        working-directory: rc
+        env:
+          TOOL_NODE_FLAGS: --max-old-space-size=12288
+          BABEL_ENV: production
+        run: |
+          set -o pipefail
+          yarn build:ci 2>&1 | tee /tmp/meteor-build.log
+          # Meteor only warns about imports it cannot resolve; the image would then die at startup.
+          # Fail if any of them points at licensed code or at the FOSS replacements.
+          if grep -A200 'Unable to resolve some modules' /tmp/meteor-build.log \
+            | grep -E '@rocket\.chat/(license|presence|media-calls|federation-matrix|omnichannel-services|abac|network-broker|omni-core-ee|pdf-worker)|/ee/|/foss/'; then
+            echo "::error::Meteor could not resolve licensed or FOSS-replacement modules"; exit 1
+          fi
+          grep -A40 'Unable to resolve some modules' /tmp/meteor-build.log || echo "no unresolved modules"
+
+      - name: Trim bundle (as upstream CI does for linux/amd64 musl)
+        run: |
+          B=/tmp/dist/bundle/programs/server/npm/node_modules
+          for d in \
+            meteor/babel-compiler/node_modules/@meteorjs/swc-core/.swc/node_modules/@swc/core-darwin-arm64 \
+            meteor/babel-compiler/node_modules/@meteorjs/swc-core/.swc/node_modules/@swc/core-linux-x64-musl \
+            meteor/babel-compiler/node_modules/@meteorjs/swc-core/.swc/node_modules/@swc/core-linux-arm64-musl \
+            meteor/babel-compiler/node_modules/typescript \
+            @rocket.chat/i18n/src \
+            typescript; do rm -rf "$B/$d"; done
+          find /tmp/dist/bundle -type f -name '*.d.ts' -delete
+          [ -d "$B/@img" ] && find "$B/@img" -maxdepth 1 -type d -name 'sharp-*' -not -name '*-linuxmusl-x64' -exec rm -rf {} +
+          [ -d "$B/@napi-rs" ] && find "$B/@napi-rs" -maxdepth 1 -type d -name 'pinyin-linux-*' -not -name '*-linux-x64-*' -exec rm -rf {} +
+          [ -d "$B/@esbuild" ] && find "$B/@esbuild" -maxdepth 1 -type d -name 'linux-*' -not -name '*-x64' -exec rm -rf {} +
+          du -sh /tmp/dist/bundle
+
+      - name: Build image
+        run: |
+          LOCAL="rocketchat-foss:${{ steps.version.outputs.version }}"
+          docker build \
+            -f rc/apps/meteor/.docker/Dockerfile.alpine \
+            --target release-standard \
+            --label org.opencontainers.image.title="Rocket.Chat FOSS" \
+            --label org.opencontainers.image.description="Rocket.Chat ${{ steps.version.outputs.version }} built from source without licensed (ee) code. Build run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --label org.opencontainers.image.source="${{ github.server_url }}/${{ github.repository }}" \
+            --label org.opencontainers.image.revision="${{ github.sha }}" \
+            --label org.opencontainers.image.version="${{ steps.version.outputs.version }}" \
+            --label org.opencontainers.image.licenses=MIT \
+            --label io.rocket.chat.upstream.revision="$UPSTREAM_SHA" \
+            -t "$LOCAL" /tmp/dist
+          docker image ls "$LOCAL"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: push
+        name: Push candidate
+        run: |
+          CANDIDATE="$IMAGE:${{ steps.version.outputs.version }}-build.${{ github.run_number }}"
+          docker tag "rocketchat-foss:${{ steps.version.outputs.version }}" "$CANDIDATE"
+          docker push "$CANDIDATE"
+          echo "candidate=$CANDIDATE" >> "$GITHUB_OUTPUT"
+          echo "candidate: \`$CANDIDATE\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meteor-build-log
+          path: /tmp/meteor-build.log
+          if-no-files-found: ignore
+
+  smoke:
+    needs: build
+    uses: ./.github/workflows/smoke.yml
+    with:
+      image: ${{ needs.build.outputs.candidate }}
+      version: ${{ needs.build.outputs.version }}
+      promote: true

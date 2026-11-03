@@ -1,0 +1,14 @@
+{
+	"name": "@rocket.chat/license",
+	"version": "0.0.0-foss",
+	"private": true,
+	"description": "FOSS replacement for the Enterprise license package. There is no license in a FOSS build: no premium module is ever enabled and no limit is ever enforced.",
+	"license": "MIT",
+	"main": "index.js",
+	"types": "index.d.ts",
+	"files": [
+		"index.js",
+		"index.d.ts",
+		"src"
+	]
+}
