@@ -41,7 +41,17 @@ ghcr.io/jonghokim27/rocketchat-foss:<판>-build.<번호>   # 빌드마다 남는
    전부 실제 파일로 풀리는지 확인한다. upstream 이 바뀌어 가정이 깨지면 여기서 멈춘다.
 
 빌드 절차는 upstream CI(`.github/actions/meteor-build`, `build-docker`)와 같고, 이미지는 upstream
-`apps/meteor/.docker/Dockerfile.alpine` 의 `release-standard` 단계 그대로다(linux/amd64).
+`apps/meteor/.docker/Dockerfile.alpine` 의 `release-standard` 단계다(linux/amd64). 거기에 보안 패치만 더한다.
+
+| 패치 | 이유 |
+|---|---|
+| dompurify 3.4.17, proxy-addr 2.0.8 (루트 `resolutions`, Meteor `webapp` 사본 교체) | Critical CVE. upstream `develop` 과 같은 판 |
+| `programs/server` 의 npm `overrides` 로 tar 7.5.21 | 이미지 빌드가 까는 node-gyp 10·cacache 18 의 tar 6. upstream 도 tar 7 로 강제 |
+| 실행 단계에서 npm·npx 제거 | 베이스 이미지 npm 의 tar 7.5.11. 서버는 `node main.js` 만 쓴다 |
+
+`scripts/check-image-deps.sh` 가 빌드된 이미지 안에 옛 판이 남았으면 빌드를 실패시킨다.
+
+판을 고정해 쓰려면 움직이는 `:<판>` 대신 `:<판>-build.<번호>` 를 쓴다.
 
 ## 빠지는 기능
 
