@@ -19,7 +19,16 @@ const edit = (path, fn) => {
 	fs.writeFileSync(path, `${JSON.stringify(json, null, indent)}\n`);
 };
 
+// Critical CVEs in dependencies the upstream release pins; each fix is a patch release of the same line.
+// (tar 6 comes from the image build's own npm install and is handled in build.yml.)
+const SECURITY_RESOLUTIONS = {
+	'dompurify': '3.4.17', // GHSA-cg2g-xh64-v4q7 (3.4.14)
+	'proxy-addr': '2.0.8', // CVE-2026-90711 (2.0.7)
+};
+
 edit('package.json', (pkg) => {
+	pkg.resolutions = { ...pkg.resolutions, ...SECURITY_RESOLUTIONS };
+	console.log(`   root resolutions: ${Object.entries(SECURITY_RESOLUTIONS).map(([k, v]) => `${k}@${v}`).join(', ')}`);
 	const before = pkg.workspaces.length;
 	pkg.workspaces = pkg.workspaces.filter((w) => !w.startsWith('ee/'));
 	if (pkg.workspaces.length === before) {

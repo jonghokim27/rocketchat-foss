@@ -164,6 +164,23 @@ jobs:
           [ -d "$B/@esbuild" ] && find "$B/@esbuild" -maxdepth 1 -type d -name 'linux-*' -not -name '*-x64' -exec rm -rf {} +
           du -sh /tmp/dist/bundle
 
+      - name: Security patches outside the yarn tree
+        run: |
+          S=/tmp/dist/bundle/programs/server
+          # The Dockerfile npm-installs Meteor's node-gyp 10 / cacache 18, which pull tar 6 (CVE-2026-59873
+          # and others). Upstream already forces tar 7 on its own node-gyp; do the same here.
+          node -e '
+            const fs = require("fs"); const f = process.argv[1]; const p = JSON.parse(fs.readFileSync(f, "utf8"));
+            p.overrides = { ...p.overrides, tar: "7.5.21" };
+            fs.writeFileSync(f, JSON.stringify(p, null, 2) + "\n");' "$S/package.json"
+          # Meteor's webapp package ships its own express tree with proxy-addr 2.0.7 (CVE-2026-90711).
+          # 2.0.8 has the same dependencies (forwarded 0.2.0, ipaddr.js 1.9.1).
+          D="$S/npm/node_modules/meteor/webapp/node_modules/proxy-addr"
+          if [ -d "$D" ]; then
+            (cd /tmp && npm pack proxy-addr@2.0.8 >/dev/null)
+            rm -rf "$D" && mkdir -p "$D" && tar xzf /tmp/proxy-addr-2.0.8.tgz -C "$D" --strip-components=1
+          fi
+
       - name: Build image
         run: |
           LOCAL="rocketchat-foss:${{ steps.version.outputs.version }}"
@@ -179,6 +196,9 @@ jobs:
             --label io.rocket.chat.upstream.revision="$UPSTREAM_SHA" \
             -t "$LOCAL" /tmp/dist
           docker image ls "$LOCAL"
+
+      - name: Check patched dependency versions in the image
+        run: bash foss/scripts/check-image-deps.sh "rocketchat-foss:${{ steps.version.outputs.version }}"
 
       - uses: docker/login-action@v3
         with:
