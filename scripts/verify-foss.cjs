@@ -34,7 +34,8 @@ const walk = (dir, out) => {
 	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
 		if (entry.isDirectory()) {
 			if (!SKIP_DIR.has(entry.name)) walk(path.join(dir, entry.name), out);
-		} else if (SOURCE.test(entry.name) && !SKIP_FILE.test(entry.name) && !entry.name.endsWith('.d.ts')) {
+		} else if (entry.isFile() && SOURCE.test(entry.name) && !SKIP_FILE.test(entry.name) && !entry.name.endsWith('.d.ts')) {
+			// Symlinks are skipped: upstream links build outputs (e.g. public/workers) that do not exist yet.
 			out.push(path.join(dir, entry.name));
 		}
 	}
