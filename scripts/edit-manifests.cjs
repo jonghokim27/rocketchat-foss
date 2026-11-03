@@ -28,6 +28,22 @@ edit('package.json', (pkg) => {
 	console.log(`   root workspaces: ${pkg.workspaces.join(', ')}`);
 });
 
+// apps/meteor does not hoist its dependencies (installConfig.hoistingLimits: workspaces), so the
+// root copy of some packages existed only because a licensed workspace depended on them. Packages
+// that import such a package without declaring it lose it with the ee workspaces; declare it.
+// Found by comparing the root hoisting closure of yarn.lock with and without ee/* (8.9.0).
+const meteorPkg = JSON.parse(fs.readFileSync('apps/meteor/package.json', 'utf8'));
+const UNDECLARED = [['packages/core-services/package.json', 'sharp']]; // `import type { FitEnum } from 'sharp'`
+for (const [manifest, dep] of UNDECLARED) {
+	const range = meteorPkg.dependencies?.[dep] ?? meteorPkg.devDependencies?.[dep];
+	if (!range) throw new Error(`apps/meteor no longer depends on ${dep} — re-check ${manifest}`);
+	edit(manifest, (pkg) => {
+		if (pkg.dependencies?.[dep] || pkg.devDependencies?.[dep]) return;
+		pkg.devDependencies = { ...pkg.devDependencies, [dep]: range };
+		console.log(`   ${manifest}: declared devDependencies.${dep} ${range}`);
+	});
+}
+
 edit('apps/meteor/package.json', (pkg) => {
 	for (const name of LICENSED_WITHOUT_REPLACEMENT) {
 		for (const field of ['dependencies', 'devDependencies']) {
