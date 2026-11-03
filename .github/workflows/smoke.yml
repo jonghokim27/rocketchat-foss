@@ -25,9 +25,13 @@ env:
 
 jobs:
   smoke:
-    runs-on: ubuntu-24.04
+    # MongoDB 8.0 refuses to start on Linux 6.19+ (SERVER-121912); the ubuntu-24.04 runners are there.
+    runs-on: ubuntu-22.04
     timeout-minutes: 40
     steps:
+      - name: Kernel
+        run: uname -r | tee -a "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
