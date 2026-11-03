@@ -93,7 +93,14 @@ jobs:
 
       - name: Build packages
         working-directory: rc
-        run: yarn build
+        run: |
+          # core-typings and ui-kit patch the shared node_modules/typescript in place (ts-patch) as part
+          # of their build; turbo runs other packages' tsc at the same time, which can read a half-written
+          # _tsc.js. Patch once up front so the in-build runs find it already patched, and retry once
+          # (finished packages come from turbo's cache) in case they still collide.
+          yarn workspace @rocket.chat/core-typings run .:build:prepare
+          yarn workspace @rocket.chat/ui-kit run .:build:prepare
+          yarn build || { echo "::warning::yarn build failed once, retrying"; yarn build; }
 
       - name: Production dependencies for the Meteor build
         working-directory: rc
