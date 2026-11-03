@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fails if any copy of a security-patched package under /app is older than its fixed version.
+# Fails if any copy of a security-patched package (app bundle or base image) is older than its fixed version.
 #
 #   scripts/check-image-deps.sh <image>
 set -euo pipefail
@@ -35,7 +35,8 @@ const walk = (dir) => {
 		walk(p);
 	}
 };
-walk("/app");
+// The app bundle and whatever the base image installs globally.
+for (const root of ["/app", "/usr/local/lib", "/opt"]) walk(root);
 
 let bad = 0;
 for (const { name, version, p } of found) {

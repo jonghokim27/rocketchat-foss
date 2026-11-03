@@ -186,8 +186,13 @@ jobs:
       - name: Build image
         run: |
           LOCAL="rocketchat-foss:${{ steps.version.outputs.version }}"
+          # The node base image ships npm 11 with tar 7.5.11 (CVE-2026-59873). The server runs `node main.js`
+          # and only the builder stage uses npm, so the release stage drops npm/npx.
+          cp rc/apps/meteor/.docker/Dockerfile.alpine /tmp/Dockerfile.foss
+          sed -i 's#^\(    && useradd -u 65533 -r -g rocketchat rocketchat\)$#\1 \\\n    \&\& rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx#' /tmp/Dockerfile.foss
+          grep -q 'rm -rf /usr/local/lib/node_modules/npm' /tmp/Dockerfile.foss || { echo "::error::release stage layout changed, npm removal not applied"; exit 1; }
           docker build \
-            -f rc/apps/meteor/.docker/Dockerfile.alpine \
+            -f /tmp/Dockerfile.foss \
             --target release-standard \
             --label org.opencontainers.image.title="Rocket.Chat FOSS" \
             --label org.opencontainers.image.description="Rocket.Chat ${{ steps.version.outputs.version }} built from source without licensed (ee) code. Build run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
