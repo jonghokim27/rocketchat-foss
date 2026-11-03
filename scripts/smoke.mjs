@@ -93,13 +93,6 @@ await step('web client is served', async () => {
 	if (!res.ok || !html.includes('meteor_runtime_config')) throw new Error(`GET / -> ${res.status}: ${html.slice(0, 400)}`);
 });
 
-await step('server info', async () => {
-	const res = await fetch(`${base}/api/info`);
-	const info = await res.json();
-	if (expectedVersion && info.version !== expectedVersion) throw new Error(`version ${info.version} != ${expectedVersion}`);
-	console.log(`(version ${info.version}) `);
-});
-
 const me = await step('REST login', async () => {
 	const res = await fetch(`${base}/api/v1/login`, {
 		method: 'POST',
@@ -110,6 +103,15 @@ const me = await step('REST login', async () => {
 	if (json.status !== 'success') throw new Error(JSON.stringify(json));
 	auth = { 'X-Auth-Token': json.data.authToken, 'X-User-Id': json.data.userId };
 	return { userId: json.data.userId, token: json.data.authToken };
+});
+
+await step('server info', async () => {
+	// Anonymous callers only get major.minor; an authenticated call reports the full version.
+	const res = await fetch(`${base}/api/info`, { headers: auth });
+	const info = await res.json();
+	const version = info.info?.version ?? info.version;
+	if (expectedVersion && version !== expectedVersion) throw new Error(`version ${version} != ${expectedVersion}`);
+	console.log(`(version ${version}) `);
 });
 
 await step('REST login alone does not mark the user online', async () => {
@@ -147,7 +149,7 @@ await step('upload a file and download it', async () => {
 	form.append('file', new Blob([content], { type: 'text/plain' }), 'smoke.txt');
 	const { file } = await call('POST', `rooms.media/${channel._id}`, form);
 	await call('POST', `rooms.mediaConfirm/${channel._id}/${file._id}`, { msg: 'smoke upload' });
-	const res = await fetch(`${base}${file.url}`, { headers: auth });
+	const res = await fetch(new URL(file.url, base), { headers: auth });
 	const body = await res.text();
 	if (!res.ok || body !== content) throw new Error(`download ${res.status}: ${body.slice(0, 80)}`);
 });

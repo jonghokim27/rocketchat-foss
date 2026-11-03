@@ -19,6 +19,8 @@ try {
 	await page.locator('input[name="usernameOrEmail"]').fill(user, { timeout: 120000 });
 	await page.locator('input[name="password"]').fill(pass);
 	await page.locator('input[name="password"]').press('Enter');
+	// Navigating before the login round trip finishes would drop it.
+	await page.waitForFunction(() => Boolean(localStorage.getItem('Meteor.loginToken')), undefined, { timeout: 60000 });
 
 	await page.goto(`${base}/channel/foss-smoke`, { waitUntil: 'domcontentloaded' });
 	const composer = page.locator('textarea[name="msg"], [name="msg"]').first();
