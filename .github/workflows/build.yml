@@ -167,6 +167,8 @@ jobs:
       - name: Security patches outside the yarn tree
         run: |
           S=/tmp/dist/bundle/programs/server
+          # Meteor writes the bundle read-only.
+          chmod u+w "$S/package.json" "$S/npm/node_modules/meteor/webapp/node_modules"
           # The Dockerfile npm-installs Meteor's node-gyp 10 / cacache 18, which pull tar 6 (CVE-2026-59873
           # and others). Upstream already forces tar 7 on its own node-gyp; do the same here.
           node -e '
@@ -178,7 +180,7 @@ jobs:
           D="$S/npm/node_modules/meteor/webapp/node_modules/proxy-addr"
           if [ -d "$D" ]; then
             (cd /tmp && npm pack proxy-addr@2.0.8 >/dev/null)
-            rm -rf "$D" && mkdir -p "$D" && tar xzf /tmp/proxy-addr-2.0.8.tgz -C "$D" --strip-components=1
+            chmod -R u+w "$D" && rm -rf "$D" && mkdir -p "$D" && tar xzf /tmp/proxy-addr-2.0.8.tgz -C "$D" --strip-components=1
           fi
 
       - name: Build image
