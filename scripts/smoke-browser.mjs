@@ -30,6 +30,17 @@ try {
 	await page.keyboard.type(text);
 	await page.keyboard.press('Enter');
 	await page.getByText(text).first().waitFor({ timeout: 30000 });
+	// The composer shows the message optimistically; confirm the server stored it.
+	await page.waitForFunction(
+		async (expected) => {
+			const headers = { 'X-User-Id': localStorage.getItem('Meteor.userId'), 'X-Auth-Token': localStorage.getItem('Meteor.loginToken') };
+			const res = await fetch('/api/v1/channels.messages?roomName=foss-smoke&count=20', { headers });
+			const { messages = [] } = await res.json();
+			return messages.some((m) => m.msg === expected);
+		},
+		text,
+		{ timeout: 30000, polling: 1000 },
+	);
 	await page.screenshot({ path: `${shots}/room.png` });
 	console.log('• browser: logged in, opened #foss-smoke, sent a message … ok');
 } catch (err) {
